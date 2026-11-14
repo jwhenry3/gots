@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <rect width="256" height="256" rx="48" fill="#00ADD8"/>
+  <!-- horns -->
+  <path d="M96 82 Q68 64 62 32" stroke="#6B4F3B" stroke-width="14" fill="none" stroke-linecap="round"/>
+  <path d="M160 82 Q188 64 194 32" stroke="#6B4F3B" stroke-width="14" fill="none" stroke-linecap="round"/>
+  <!-- ears -->
+  <ellipse cx="60" cy="122" rx="24" ry="13" transform="rotate(-28 60 122)" fill="#E3D5C0"/>
+  <ellipse cx="196" cy="122" rx="24" ry="13" transform="rotate(28 196 122)" fill="#E3D5C0"/>
+  <!-- face -->
+  <path d="M128 62 C162 62 186 96 186 136 C186 178 160 214 128 214 C96 214 70 178 70 136 C70 96 94 62 128 62 Z" fill="#FBF7EF"/>
+  <!-- forelock -->
+  <path d="M104 66 Q128 46 152 66 Q128 56 104 66 Z" fill="#E3D5C0"/>
+  <!-- eyes: horizontal goat pupils -->
+  <rect x="94" y="122" width="24" height="11" rx="5.5" fill="#263238"/>
+  <rect x="138" y="122" width="24" height="11" rx="5.5" fill="#263238"/>
+  <!-- muzzle -->
+  <ellipse cx="128" cy="180" rx="38" ry="25" fill="#E3D5C0"/>
+  <!-- nostrils -->
+  <circle cx="116" cy="177" r="4" fill="#263238"/>
+  <circle cx="140" cy="177" r="4" fill="#263238"/>
+  <!-- beard tuft -->
+  <path d="M117 203 Q128 222 139 203 L134 234 Q128 239 122 234 Z" fill="#E3D5C0"/>
+</svg>

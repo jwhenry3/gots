@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/goat.svg" width="128" alt="GOTS goat"></p>
+
 # GOTS (Goats) — write NestJS apps in TypeScript syntax, ship them as native Go
 
 **gots** is a TypeScript-flavored language that transpiles to plain Go — the
