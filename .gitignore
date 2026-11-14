@@ -5,7 +5,7 @@ node_modules/
 
 # --- generated transpiler output (`.go` emitted next to `.ts` sources) ---
 nestgo/src/**/*.go
-gots/examples/*.go
+gots/examples/**/*.go
 
 # --- Go build artifacts ---
 *.exe

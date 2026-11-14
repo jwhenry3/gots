@@ -52,6 +52,21 @@ the Go type name so the emitter recovers it through real checker inference.
 | `ch.emit(v)`, `ch.recv()`, `ch.close()` | `ch <- v`, `<-ch`, `close(ch)` |
 | `new Error(m)` | `errors.New(m)` |
 | `delete m[k]` | `delete(m, k)` |
+| `a ?? b` | nil-guarded IIFE; non-nilable `a` collapses to `a` |
+| `a?.b`, `a?.[k]`, `a?.f(x)` | nil-guarded IIFE (single eval via temp); `a?.b ?? c` fuses into one check |
+| `a \|\| b`, `a && b` (non-bool) | JS truthiness via zero-value IIFE (`""`, `0`, `nil`); bool operands stay `\|\|`/`&&` |
+| `a ??= b`, `a \|\|= b`, `a &&= b` (stmts) | `if a == nil` / falsy / truthy `{ a = b }` |
+| `k in m` | `_, ok := m[k]`; `i in slice` -> bounds check |
+| `x instanceof C` | `_, ok := x.(*C)` IIFE; statically non-nilable LHS -> `false` |
+| `typeof x` | folds to `"number"`/`"string"`/`"boolean"`/`"function"`/`"object"` when known; `any` -> `fmt.Sprintf("%T", x)` (Go type names) |
+| `label: for` + `break label`/`continue label` | direct (Go labels) |
+| `[...a, x, ...b]` | `append(append(append([]T{}, a...), x), b...)` — copy semantics |
+| `f(...xs)` | `f(xs...)`; into `console.*` -> `[]any` conversion |
+| `f(x = d)` / `f(a, ..., z = d)` | signature drops defaults; **call sites pad** (`f()` -> `f(d)`), `undefined` arg -> default |
+| `f({a, b}: T)` | `func f(__p0 T) { a, b := __p0.A, __p0.B }` |
+| `let {a, b} = o` | temp + `a := __t.A`; `let [a,b] = s` (non-call) -> index destructure |
+| `get y(): T` / `set y(v)` | `func Y() T` / `func SetY(v T)`; `o.y` -> `o.Y()`, `o.y = v` -> `o.SetY(v)`, `o.y += v` -> `o.SetY(o.Y() + v)` |
+| `interface { [k: K]: V }` | `type X map[K]V` |
 
 ## Declarations
 
@@ -77,6 +92,16 @@ the Go type name so the emitter recovers it through real checker inference.
 
 ## Errors (not yet supported — fail with diagnostics)
 
-Default params, rest params, plain unions (use `T|null`), `??`, `?.`,
-destructuring params, getters/setters, index signatures, labeled break/continue,
-spread in most positions.
+Plain unions (use `T|null`), nested/rest/defaults inside binding patterns,
+spread in object literals, `??=`/`||=`/`&&=` in expression position,
+static accessors, comma expressions, `with`, getters/setters on interfaces.
+
+## JS-semantics notes
+
+- `typeof x` on `any` yields Go type names (`int`, `*User`) — not JS names.
+- Truthiness on `any`-typed values is a nil check — `""`/`0` inside `any`
+  read as truthy (unlike JS). Keep `||`/`&&` operands concretely typed.
+- Default params pad at the call site — a default referencing an earlier
+  param (`f(a, b = a)`) won't compile.
+- TS "always truthy/falsy/nullish" lints (TS2869–2873) are suppressed at
+  build; the editor may still underline constant `||`/`&&`/`??` operands.

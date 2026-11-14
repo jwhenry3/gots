@@ -49,6 +49,13 @@ interface Ctx {
   rootDir: string;                  // the build root — files there emit `package main`
   pkgPath: Map<string, string>;     // Go package name -> import path ("users" -> "gonest/src/users")
   aliasOf: Map<string, string>;     // local ident -> qualified emit name ("ConfigService" -> "core.ConfigService")
+  // call-site default-param padding + accessor rewriting
+  funcDefaults: Map<string, (ts.Expression | undefined)[]>;          // fn -> per-param defaults
+  methodDefaults: Map<string, Map<string, (ts.Expression | undefined)[]>>; // cls -> method -> defaults
+  getterOf: Map<string, Set<string>>; // cls -> get-accessor prop names
+  setterOf: Map<string, Set<string>>; // cls -> set-accessor prop names
+  consts: Set<string>;              // names declared `const` (Go const-expr eligibility)
+  tmpN: number;                     // synthesized temp vars (__t0, __t1...)
 }
 
 interface CtrlMeta {
@@ -86,6 +93,96 @@ function qNew(ctx: Ctx, name: string): string { return pkgPrefixOf(ctx, name) + 
 function baseType(t: string): string {
   const dot = t.lastIndexOf(".");
   return dot >= 0 ? t.slice(dot + 1) : t;
+}
+
+// ---------- JS-semantics helpers (??, ?., ||, &&, typeof, truthiness) ---------
+
+const NUMERIC_RE = /^(u?int(8|16|32|64)?|byte|rune|float32|float64|complex64|complex128|uintptr)$/;
+
+function isNilableGo(t: string): boolean {
+  return t === "any" || t === "error" || t.startsWith("*") || t.startsWith("[]") ||
+    t.startsWith("map[") || t.startsWith("chan ") || t.startsWith("func(") ||
+    t.startsWith("interface") || t === "nil";
+}
+
+function zeroValueOf(t: string): string {
+  if (t === "bool") return "false";
+  if (t === "string") return `""`;
+  if (isNilableGo(t)) return "nil";
+  if (NUMERIC_RE.test(t)) return "0";
+  return `${t}{}`; // struct / array zero literal
+}
+
+// raw (unstripped) Go type of an expression — scope tables first, then the
+// real checker; unlike typeNameOf this keeps leading * / [] so we can tell
+// nilable from value types
+function rawGoType(ctx: Ctx, e: ts.Expression): string | undefined {
+  if (ts.isIdentifier(e)) { const t = ctx.varTypes.get(e.text); if (t) return t; }
+  return checkedGoType(ctx, e);
+}
+
+// the checker's type with null/undefined/void members removed from unions —
+// for flag checks (BooleanLike etc.) on operands whose Go type is ambiguous
+function tsRealType(ctx: Ctx, e: ts.Expression): ts.Type | undefined {
+  if (!ctx.checker) return undefined;
+  try {
+    const t = ctx.checker.getTypeAtLocation(e);
+    if (t.isUnion()) return t.types.find(x =>
+      !(x.flags & (ts.TypeFlags.Undefined | ts.TypeFlags.Null | ts.TypeFlags.Void))) ?? t;
+    return t;
+  } catch { return undefined; }
+}
+
+// JS truthiness -> Go zero-value comparison: `a` (bool), `a != 0` (numbers),
+// `a != ""` (strings), `a != nil` (pointers/slices/maps/chans/any)
+function truthy(ctx: Ctx, e: ts.Expression): string {
+  const ee = ex(ctx, e);
+  const lt = rawGoType(ctx, e);
+  if (lt === "bool") return ee;
+  if (lt === "string") return `${ee} != ""`;
+  if (lt && NUMERIC_RE.test(lt)) return `${ee} != 0`;
+  const t = tsRealType(ctx, e);
+  if (t) {
+    if (t.flags & ts.TypeFlags.BooleanLike) return ee;
+    if (t.flags & ts.TypeFlags.NumberLike) return `${ee} != 0`;
+    if (t.flags & ts.TypeFlags.StringLike) return `${ee} != ""`;
+  }
+  return `${ee} != nil`;
+}
+
+// `a?.<tail>` — nil-guarded IIFE; mkTail maps the receiver text to the full
+// expression so calls/elements/property chains all share the same shape.
+// Non-nilable receivers skip the guard (Go value types can't be nil).
+function optChain(ctx: Ctx, recv: ts.Expression, mkTail: (r: string) => string,
+    want?: ts.TypeNode, eForType?: ts.Expression): string {
+  const lt = rawGoType(ctx, recv);
+  if (lt && !isNilableGo(lt)) return mkTail(ex(ctx, recv));
+  const rt = want ? emitType(ctx, want) : (eForType && checkedGoType(ctx, eForType)) ?? "any";
+  return `(func() ${rt} {\n__q := ${ex(ctx, recv)}\nif __q == nil {\nreturn ${zeroValueOf(rt)}\n}\nreturn ${mkTail("__q")}\n})()`;
+}
+
+// JS falsiness — `!truthy` rendered idiomatically (`x == nil`, `x == 0`, `!ok`)
+function falsy(ctx: Ctx, e: ts.Expression): string {
+  const t = truthy(ctx, e);
+  const i = t.lastIndexOf(" != ");
+  if (i >= 0) return t.slice(0, i) + " == " + t.slice(i + 4);
+  return `!(${t})`;
+}
+
+// the receiver + tail of a `?.` chain, when the LHS of `??` is itself an
+// optional access — lets `a?.b ?? c` fuse into one nil-check instead of
+// collapsing through the zero value
+function qdLeft(ctx: Ctx, e: ts.Expression): { recv: ts.Expression; tail: (r: string) => string } | undefined {
+  if (ts.isPropertyAccessExpression(e) && e.questionDotToken)
+    return { recv: e.expression, tail: r => `${r}.${memberName(ctx, e.expression, e.name.text)}` };
+  if (ts.isElementAccessExpression(e) && e.questionDotToken)
+    return { recv: e.expression, tail: r => `${r}[${ex(ctx, e.argumentExpression)}]` };
+  if (ts.isCallExpression(e) && ts.isPropertyAccessExpression(e.expression) && e.expression.questionDotToken) {
+    const pa = e.expression;
+    return { recv: pa.expression, tail: r =>
+      `${r}.${memberName(ctx, pa.expression, pa.name.text)}(${padArgs(ctx, e, methodDefsOf(ctx, pa.expression, pa.name.text))})` };
+  }
+  return undefined;
 }
 
 class W {
@@ -168,13 +265,30 @@ export function transpileFile(file: string, rootDir?: string): TranspileResult {
     }
   }
   return run(sf, file, program.getTypeChecker(),
-    [...program.getSyntacticDiagnostics(sf), ...program.getSemanticDiagnostics(sf)],
+    [...program.getSyntacticDiagnostics(sf), ...program.getSemanticDiagnostics(sf)]
+      .filter(d => !SUPPRESSED_DIAG_CODES.has(d.code)),
     program.getSourceFiles().filter(f => !f.isDeclarationFile), buildRoot, pkgPath);
 }
 
+// TS "always truthy/falsy/nullish" lints — gots implements ??, ?., ||, &&,
+// and ??= natively, so constant-operand warnings are intentional code
+const SUPPRESSED_DIAG_CODES = new Set([
+  2869, // Right operand of ?? is unreachable because the left operand is never nullish
+  2870, // This kind of expression is always nullish
+  2871, // This kind of expression is always nullish
+  2872, // This kind of expression is always truthy
+  2873, // This kind of expression is always falsy
+]);
+
 function collectTsFiles(dir: string): string[] {
   const out: string[] = [];
-  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return out; // unreadable dirs (permissions) are skipped, not fatal
+  }
+  for (const e of entries) {
     const p = path.join(dir, e.name);
     if (e.isDirectory()) out.push(...collectTsFiles(p));
     else if (e.name.endsWith(".ts") && !e.name.endsWith(".d.ts")) out.push(p);
@@ -234,13 +348,22 @@ function run(sf: ts.SourceFile, file: string, checker: ts.TypeChecker | undefine
     rootDir: buildRoot,
     pkgPath: pkgPath ?? new Map(),
     aliasOf: new Map(),
+    funcDefaults: new Map(), methodDefaults: new Map(),
+    getterOf: new Map(), setterOf: new Map(), consts: new Set(), tmpN: 0,
   };
 
   // pass 0 — enums, member tables (TS class/interface members are public ->
   // exported Go names), and top-level function return types — across ALL
   // sibling files, since they share the Go package's namespace.
   for (const st of ctx.sfs!.flatMap(f => f.statements)) {
-    if (ts.isEnumDeclaration(st)) ctx.enums.add(st.name.text);
+    if (ts.isEnumDeclaration(st)) {
+      ctx.enums.add(st.name.text);
+      for (const m of st.members) ctx.consts.add(m.name.getText());
+    }
+    if (ts.isVariableStatement(st) && (st.declarationList.flags & ts.NodeFlags.Const)) {
+      for (const d of st.declarationList.declarations)
+        if (ts.isIdentifier(d.name)) ctx.consts.add(d.name.text);
+    }
     if (ts.isInterfaceDeclaration(st)) {
       const members = new Set<string>();
       for (const m of st.members) if (m.name) members.add(m.name.getText());
@@ -248,6 +371,7 @@ function run(sf: ts.SourceFile, file: string, checker: ts.TypeChecker | undefine
     }
     if (ts.isFunctionDeclaration(st) && st.name) {
       ctx.funcRets.set(st.name.text, st.type ? emitType(ctx, st.type, true) : "");
+      ctx.funcDefaults.set(st.name.text, st.parameters.map(p => p.initializer));
     }
     if (ts.isClassDeclaration(st) && st.name) {
       const members = new Set<string>();
@@ -258,6 +382,26 @@ function run(sf: ts.SourceFile, file: string, checker: ts.TypeChecker | undefine
           const mn = m.name.getText();
           members.add(mn);
           if (ts.isMethodDeclaration(m)) rets.set(mn, m.type ? emitType(ctx, m.type, true) : "");
+        }
+        if (ts.isGetAccessorDeclaration(m) && m.name) {
+          const pn = m.name.getText();
+          if (!hasMod(m, ts.SyntaxKind.StaticKeyword)) {
+            members.add(pn);
+            if (!ctx.getterOf.has(st.name!.text)) ctx.getterOf.set(st.name!.text, new Set());
+            ctx.getterOf.get(st.name!.text)!.add(pn);
+          }
+        }
+        if (ts.isSetAccessorDeclaration(m) && m.name) {
+          const pn = m.name.getText();
+          if (!hasMod(m, ts.SyntaxKind.StaticKeyword)) {
+            members.add(pn);
+            if (!ctx.setterOf.has(st.name!.text)) ctx.setterOf.set(st.name!.text, new Set());
+            ctx.setterOf.get(st.name!.text)!.add(pn);
+          }
+        }
+        if (ts.isMethodDeclaration(m) && m.name) {
+          if (!ctx.methodDefaults.has(st.name!.text)) ctx.methodDefaults.set(st.name!.text, new Map());
+          ctx.methodDefaults.get(st.name!.text)!.set(m.name.getText(), m.parameters.map(p => p.initializer));
         }
         if (ts.isConstructorDeclaration(m)) {
           // parameter properties (private x: T) are members too
@@ -556,12 +700,15 @@ function emitType(ctx: Ctx, tn: ts.TypeNode | undefined | null, inReturn = false
   }
 }
 
-function emitParam(ctx: Ctx, p: ts.ParameterDeclaration, dropName = false): string {
-  if (p.initializer) fail(ctx, p, "default parameters are not supported (Go has none)");
-  if (!ts.isIdentifier(p.name)) { fail(ctx, p, "destructured parameters are not supported"); return "_ any"; }
+function emitParam(ctx: Ctx, p: ts.ParameterDeclaration, dropName = false, idx = 0): string {
+  if (!ts.isIdentifier(p.name)) {
+    // destructured param -> a synthetic positional arg, unpacked at body top
+    return `__p${idx} ${p.type ? emitType(ctx, p.type) : "any"}`;
+  }
   const name = dropName ? "" : p.name.text + " ";
   if (p.dotDotDotToken) return name + "..." + emitType(ctx, elemOf(p.type));
   if (p.questionToken) return name + "*" + emitType(ctx, p.type);
+  // defaults are dropped from the signature — callers pad them at the call site
   return name + emitType(ctx, p.type ?? undefined);
 }
 
@@ -570,7 +717,40 @@ function elemOf(t?: ts.TypeNode): ts.TypeNode | undefined {
 }
 
 function emitParams(ctx: Ctx, params: ts.NodeArray<ts.ParameterDeclaration> | ts.ParameterDeclaration[]): string {
-  return [...params].map(p => emitParam(ctx, p)).join(", ");
+  return [...params].map((p, i) => emitParam(ctx, p, false, i)).join(", ");
+}
+
+// destructured params become `__pN` — unpack them to locals at the top of
+// the body: `f({a, b}: T)` -> `a, b := __p0.A, __p0.B`
+function emitParamDestructures(ctx: Ctx, w: W, params: readonly ts.ParameterDeclaration[]) {
+  params.forEach((p, i) => {
+    if (ts.isObjectBindingPattern(p.name)) {
+      if (p.type) ctx.varTypes.set(`__p${i}`, emitType(ctx, p.type));
+      for (const el of p.name.elements) {
+        if (el.dotDotDotToken) { fail(ctx, el, "rest in destructured params is not supported"); continue; }
+        if (el.initializer) { fail(ctx, el, "defaults in destructured params are not supported"); continue; }
+        if (!ts.isIdentifier(el.name) || (el.propertyName && !ts.isIdentifier(el.propertyName))) {
+          fail(ctx, el, "nested destructured params are not supported"); continue;
+        }
+        const prop = (el.propertyName ?? el.name).text;
+        // type-literal params emit verbatim field names; named types go
+        // through the member table so exported (capitalized) names win
+        const pt = p.type ? emitType(ctx, p.type) : "";
+        const propGo = p.type && ts.isTypeLiteralNode(p.type) ? prop
+          : ctx.memberOf.get(baseType(pt))?.has(prop) ? cap(prop) : prop;
+        w.w(`${el.name.text} := __p${i}.${propGo}`);
+        const t = tsRealType(ctx, el.name as unknown as ts.Expression);
+        if (t) { const g = goTypeName(ctx, ctx.checker!, t, el.name as unknown as ts.Expression); if (g) ctx.varTypes.set(el.name.text, g); }
+      }
+    } else if (ts.isArrayBindingPattern(p.name)) {
+      if (p.type) ctx.varTypes.set(`__p${i}`, emitType(ctx, p.type));
+      p.name.elements.forEach((el, j) => {
+        if (ts.isOmittedExpression(el)) { w.w(`_ = __p${i}[${j}]`); return; }
+        if (!ts.isIdentifier(el.name)) { fail(ctx, el, "nested destructured params are not supported"); return; }
+        w.w(`${el.name.text} := __p${i}[${j}]`);
+      });
+    }
+  });
 }
 
 function emitFuncType(ctx: Ctx, ft: ts.FunctionTypeNode | ts.MethodSignature): string {
@@ -586,7 +766,7 @@ function emitTypeLiteral(ctx: Ctx, tl: ts.TypeLiteralNode): string {
       parts.push(`${m.name.getText()} ${t}`);
     } else if (ts.isMethodSignature(m) && m.name) {
       parts.push(`${m.name.getText()}${emitFuncType(ctx, m).replace(/^func/, "func")}`);
-    } else if (ts.isIndexSignature(m)) {
+    } else if (ts.isIndexSignatureDeclaration(m)) {
       const kt = m.parameters[0]?.type ? emitType(ctx, m.parameters[0].type) : "string";
       const vt = m.type ? emitType(ctx, m.type) : "any";
       parts.push(`map[${kt}]${vt}`); // loose approximation
@@ -773,7 +953,35 @@ function emitVar(ctx: Ctx, w: W, st: ts.VariableStatement, topLevel: boolean) {
       const names = d.name.elements.map(el =>
         ts.isBindingElement(el) && ts.isIdentifier(el.name) ? el.name.text : "_");
       const rhs = ex(ctx, d.initializer);
-      w.w(`${names.join(", ")} := ${rhs}`);
+      // a call returns multiple values; a slice/array/tuple var needs indexing
+      if (ts.isCallExpression(d.initializer)) {
+        w.w(`${names.join(", ")} := ${rhs}`);
+      } else {
+        const tmp = `__t${ctx.tmpN++}`;
+        w.w(`${tmp} := ${rhs}`);
+        names.forEach((n, i) => { if (n !== "_") w.w(`${n} := ${tmp}[${i}]`); });
+      }
+      continue;
+    }
+    // let {a, b} = obj  ->  a, b := obj.A, obj.B  (one temp so rhs evals once)
+    if (ts.isObjectBindingPattern(d.name)) {
+      if (!d.initializer) { fail(ctx, d, "destructuring needs an initializer"); continue; }
+      const tmp = `__t${ctx.tmpN++}`;
+      w.w(`${tmp} := ${ex(ctx, d.initializer)}`);
+      for (const el of d.name.elements) {
+        if (el.dotDotDotToken) { fail(ctx, el, "rest in destructuring is not supported"); continue; }
+        if (el.initializer) { fail(ctx, el, "defaults in destructuring are not supported"); continue; }
+        if (!ts.isIdentifier(el.name) || (el.propertyName && !ts.isIdentifier(el.propertyName))) {
+          fail(ctx, el, "nested destructuring is not supported"); continue;
+        }
+        const prop = (el.propertyName ?? el.name).text;
+        w.w(`${el.name.text} := ${tmp}.${memberName(ctx, d.initializer, prop)}`);
+        const t = tsRealType(ctx, el.name as unknown as ts.Expression);
+        if (t && ctx.checker) {
+          const g = goTypeName(ctx, ctx.checker, t, el.name as unknown as ts.Expression);
+          if (g) ctx.varTypes.set(el.name.text, g);
+        }
+      }
       continue;
     }
     if (!ts.isIdentifier(d.name)) { fail(ctx, d, "destructuring declarations are not supported"); continue; }
@@ -783,8 +991,8 @@ function emitVar(ctx: Ctx, w: W, st: ts.VariableStatement, topLevel: boolean) {
     const init = d.initializer ? ex(ctx, d.initializer, d.type) : "";
     if (isConst) {
       if (!init) { fail(ctx, d, "const declarations need an initializer"); continue; }
-      // Go const only holds constant expressions; otherwise fall back to var
-      if (isConstExpr(ctx, d.initializer!)) {
+      // Go const only holds constant expressions + typed consts can't be `any`
+      if (isConstExpr(ctx, d.initializer!) && typ !== "any") {
         w.w(`const ${name}${typ ? " " + typ : ""} = ${init}`);
       } else {
         w.w(`var ${name}${typ ? " " + typ : ""} = ${init}`);
@@ -811,6 +1019,7 @@ function emitFunc(ctx: Ctx, w: W, f: ts.FunctionDeclaration, nested: boolean) {
   for (const p of f.parameters) if (ts.isIdentifier(p.name) && p.type) ctx.varTypes.set(p.name.text, emitType(ctx, p.type));
   if (nested) w.open(`${name} := func${sig}`);
   else w.open(`func ${name}${sig}`);
+  emitParamDestructures(ctx, w, f.parameters);
   if (f.body) for (const s of f.body.statements) { emitComments(ctx, w, s); stmt(ctx, w, s); }
   w.close();
   ctx.retType = prevRet; ctx.inFunc--; ctx.varTypes = prevVars;
@@ -828,6 +1037,7 @@ function emitFuncLit(ctx: Ctx, f: ts.ArrowFunction | ts.FunctionExpression, want
   let body: string;
   if (ts.isBlock(f.body)) {
     const inner = new W();
+    emitParamDestructures(ctx, inner, f.parameters);
     for (const s of f.body.statements) { emitComments(ctx, inner, s); stmt(ctx, inner, s); }
     body = " {\n" + inner.text() + "\n" + "  ".repeat(0) + "}";
   } else {
@@ -875,6 +1085,35 @@ function forOfBinding(ctx: Ctx, init: ts.ForInitializer): string {
 }
 
 function emitExprStmt(ctx: Ctx, w: W, e: ts.Expression) {
+  if (ts.isBinaryExpression(e)) {
+    const k = e.operatorToken.kind;
+    // a ??= b / a ||= b / a &&= b  ->  conditional assignment
+    if (k === ts.SyntaxKind.QuestionQuestionEqualsToken ||
+        k === ts.SyntaxKind.BarBarEqualsToken || k === ts.SyntaxKind.AmpersandAmpersandEqualsToken) {
+      const lv = ex(ctx, e.left), rv = ex(ctx, e.right);
+      const cond = k === ts.SyntaxKind.QuestionQuestionEqualsToken ? `${lv} == nil`
+        : k === ts.SyntaxKind.BarBarEqualsToken ? falsy(ctx, e.left)
+        : truthy(ctx, e.left);
+      w.open(`if ${cond}`);
+      w.w(`${lv} = ${rv}`);
+      w.close();
+      return;
+    }
+    // obj.y = v / obj.y += v through a setter -> obj.SetY(v) / obj.SetY(obj.Y() + v)
+    if ((k === ts.SyntaxKind.EqualsToken || k === ts.SyntaxKind.PlusEqualsToken ||
+         k === ts.SyntaxKind.MinusEqualsToken || k === ts.SyntaxKind.AsteriskEqualsToken ||
+         k === ts.SyntaxKind.SlashEqualsToken) && ts.isPropertyAccessExpression(e.left)) {
+      const t = typeNameOf(ctx, e.left.expression);
+      const prop = e.left.name.text;
+      if (t && ctx.setterOf.get(baseType(t))?.has(prop)) {
+        const recv = ex(ctx, e.left.expression), rv = ex(ctx, e.right);
+        const rhs = k === ts.SyntaxKind.EqualsToken ? rv
+          : `${recv}.${cap(prop)}() ${e.operatorToken.getText().slice(0, -1)} ${rv}`;
+        w.w(`${recv}.Set${cap(prop)}(${rhs})`);
+        return;
+      }
+    }
+  }
   if (ts.isCallExpression(e)) {
     const callee = e.expression;
     // go(f, args...)  ->  go f(args...)
@@ -1071,6 +1310,8 @@ function emitClass(ctx: Ctx, w: W, d: ts.ClassDeclaration) {
   const staticFields: ts.PropertyDeclaration[] = [];
   const methods: ts.MethodDeclaration[] = [];
   const staticMethods: ts.MethodDeclaration[] = [];
+  const getters: ts.GetAccessorDeclaration[] = [];
+  const setters: ts.SetAccessorDeclaration[] = [];
   let ctor: ts.ConstructorDeclaration | undefined;
   const paramProps: { name: string; type: string }[] = [];
 
@@ -1085,10 +1326,15 @@ function emitClass(ctx: Ctx, w: W, d: ts.ClassDeclaration) {
         }
       }
     }
-    else if (ts.isGetAccessorDeclaration(m) || ts.isSetAccessorDeclaration(m)) {
-      fail(ctx, m, "getters/setters are not supported — use plain methods");
+    else if (ts.isGetAccessorDeclaration(m)) {
+      if (hasMod(m, ts.SyntaxKind.StaticKeyword)) fail(ctx, m, "static accessors are not supported");
+      else getters.push(m);
     }
-    else if (ts.isIndexSignature(m)) fail(ctx, m, "index signatures are not supported");
+    else if (ts.isSetAccessorDeclaration(m)) {
+      if (hasMod(m, ts.SyntaxKind.StaticKeyword)) fail(ctx, m, "static accessors are not supported");
+      else setters.push(m);
+    }
+    else if (ts.isIndexSignatureDeclaration(m)) fail(ctx, m, "index signatures are not supported");
   }
 
   // struct — members are exported (capitalized) like TS's public default,
@@ -1126,6 +1372,7 @@ function emitClass(ctx: Ctx, w: W, d: ts.ClassDeclaration) {
     for (const f of fields) if (f.initializer) w.w(`this.${cap(f.name.getText())} = ${ex(ctx, f.initializer, f.type)}`);
     for (const pp of paramProps) w.w(`this.${cap(pp.name)} = ${pp.name}`);
     ctx.inFunc++;
+    if (ctor) emitParamDestructures(ctx, w, ctor.parameters);
     if (ctor?.body) for (const s of ctor.body.statements) emitCtorStmt(ctx, w, s, info?.embeds);
     ctx.inFunc--;
     w.w("return this");
@@ -1143,7 +1390,30 @@ function emitClass(ctx: Ctx, w: W, d: ts.ClassDeclaration) {
     const prevVars = ctx.varTypes; ctx.varTypes = new Map(prevVars);
     for (const p of m.parameters) if (ts.isIdentifier(p.name) && p.type) ctx.varTypes.set(p.name.text, emitType(ctx, p.type));
     w.open(`func (this *${name}) ${mname}${tps}(${emitParams(ctx, m.parameters)})${ret ? " " + ret : ""}`);
+    emitParamDestructures(ctx, w, m.parameters);
     if (m.body) for (const s of m.body.statements) { emitComments(ctx, w, s); stmt(ctx, w, s); }
+    w.close();
+    w.w("");
+    ctx.retType = prevRet; ctx.inFunc--; ctx.varTypes = prevVars;
+  }
+
+  // accessors -> methods: get y(): T => Y() T;  set y(v: T) => SetY(v T)
+  for (const g of getters) {
+    const ret = emitType(ctx, g.type, true);
+    const prevRet = ctx.retType; ctx.retType = g.type; ctx.inFunc++;
+    const prevVars = ctx.varTypes; ctx.varTypes = new Map(prevVars);
+    w.open(`func (this *${name}) ${cap(g.name.getText())}()${ret ? " " + ret : ""}`);
+    if (g.body) for (const s of g.body.statements) { emitComments(ctx, w, s); stmt(ctx, w, s); }
+    w.close();
+    w.w("");
+    ctx.retType = prevRet; ctx.inFunc--; ctx.varTypes = prevVars;
+  }
+  for (const s of setters) {
+    const prevVars = ctx.varTypes; ctx.varTypes = new Map(prevVars);
+    for (const p of s.parameters) if (ts.isIdentifier(p.name) && p.type) ctx.varTypes.set(p.name.text, emitType(ctx, p.type));
+    const prevRet = ctx.retType; ctx.retType = undefined; ctx.inFunc++;
+    w.open(`func (this *${name}) Set${cap(s.name.getText())}(${emitParams(ctx, s.parameters)})`);
+    if (s.body) for (const st of s.body.statements) { emitComments(ctx, w, st); stmt(ctx, w, st); }
     w.close();
     w.w("");
     ctx.retType = prevRet; ctx.inFunc--; ctx.varTypes = prevVars;
@@ -1158,6 +1428,7 @@ function emitClass(ctx: Ctx, w: W, d: ts.ClassDeclaration) {
     const prevVars = ctx.varTypes; ctx.varTypes = new Map(prevVars);
     for (const p of m.parameters) if (ts.isIdentifier(p.name) && p.type) ctx.varTypes.set(p.name.text, emitType(ctx, p.type));
     w.open(`func ${name}_${mname}(${emitParams(ctx, m.parameters)})${ret ? " " + ret : ""}`);
+    emitParamDestructures(ctx, w, m.parameters);
     if (m.body) for (const s of m.body.statements) { emitComments(ctx, w, s); stmt(ctx, w, s); }
     w.close();
     w.w("");
@@ -1180,6 +1451,15 @@ function emitCtorStmt(ctx: Ctx, w: W, s: ts.Statement, embeds?: string) {
 }
 
 function emitInterface(ctx: Ctx, w: W, d: ts.InterfaceDeclaration) {
+  // pure index signatures -> a Go map type: { [k: string]: V } -> map[string]V
+  if (d.members.length && d.members.every(m => ts.isIndexSignatureDeclaration(m))) {
+    const m = d.members[0] as ts.IndexSignatureDeclaration;
+    const kt = m.parameters[0]?.type ? emitType(ctx, m.parameters[0].type) : "string";
+    const vt = m.type ? emitType(ctx, m.type) : "any";
+    w.w(`type ${d.name.text} map[${kt}]${vt}`);
+    w.w("");
+    return;
+  }
   const methods = d.members.filter(ts.isMethodSignature);
   const props = d.members.filter(ts.isPropertySignature);
   const others = d.members.length - methods.length - props.length;
@@ -1284,10 +1564,24 @@ function ex(ctx: Ctx, e: ts.Expression, want?: ts.TypeNode): string {
       const p = e as ts.PostfixUnaryExpression;
       return `${ex(ctx, p.operand)}${p.operator === ts.SyntaxKind.PlusPlusToken ? "++" : "--"}`;
     }
-    case ts.SyntaxKind.BinaryExpression: return binary(ctx, e as ts.BinaryExpression);
-    case ts.SyntaxKind.PropertyAccessExpression: return propAccess(ctx, e as ts.PropertyAccessExpression);
+    case ts.SyntaxKind.TypeOfExpression: {
+      // typeof x — statically known types fold to JS literals; `any` -> %T
+      const to = e as ts.TypeOfExpression;
+      const lt = rawGoType(ctx, to.expression);
+      if (lt === "bool") return `"boolean"`;
+      if (lt === "string") return `"string"`;
+      if (lt && NUMERIC_RE.test(lt)) return `"number"`;
+      if (lt && lt.startsWith("func(")) return `"function"`;
+      if (lt && !isNilableGo(lt)) return `"object"`;
+      ctx.uses.add("fmt");
+      return `fmt.Sprintf("%T", ${ex(ctx, to.expression)})`;
+    }
+    case ts.SyntaxKind.BinaryExpression: return binary(ctx, e as ts.BinaryExpression, want);
+    case ts.SyntaxKind.PropertyAccessExpression: return propAccess(ctx, e as ts.PropertyAccessExpression, want);
     case ts.SyntaxKind.ElementAccessExpression: {
       const ea = e as ts.ElementAccessExpression;
+      if (ea.questionDotToken)
+        return optChain(ctx, ea.expression, r => `${r}[${ex(ctx, ea.argumentExpression)}]`, want, e);
       return `${ex(ctx, ea.expression)}[${ex(ctx, ea.argumentExpression)}]`;
     }
     case ts.SyntaxKind.CallExpression: return call(ctx, e as ts.CallExpression, want);
@@ -1331,6 +1625,29 @@ function ex(ctx: Ctx, e: ts.Expression, want?: ts.TypeNode): string {
         : want && ts.isTypeReferenceNode(want) && want.typeName.getText() === "Array" ? want.typeArguments?.[0]
         : undefined;
       const goT = `[]${elem ? emitType(ctx, elem) : a.elements.length ? inferType(ctx, a.elements[0]) : "any"}`;
+      // spread elements can't live inside a composite literal — append chain:
+      // [...a, x, ...b] -> append(append(append([]T{}, a...), x), b...)
+      if (a.elements.some(el => ts.isSpreadElement(el))) {
+        const firstVal = a.elements.find(el => !ts.isSpreadElement(el));
+        const st = `[]${elem ? emitType(ctx, elem) : firstVal ? inferType(ctx, firstVal) : "any"}`;
+        let out = `${st}{}`;
+        let pending: string[] = [];
+        const flush = () => {
+          if (!pending.length) return;
+          out = out === `${st}{}` ? `${st}{${pending.join(", ")}}` : `append(${out}, ${pending.join(", ")})`;
+          pending = [];
+        };
+        for (const el of a.elements) {
+          if (ts.isSpreadElement(el)) {
+            flush();
+            out = `append(${out}, ${ex(ctx, el.expression)}...)`;
+          } else {
+            pending.push(ex(ctx, el));
+          }
+        }
+        flush();
+        return out;
+      }
       return `${goT}{${a.elements.map(el => ex(ctx, el)).join(", ")}}`;
     }
     case ts.SyntaxKind.ConditionalExpression: {
@@ -1363,9 +1680,20 @@ function isConstExpr(ctx: Ctx, e: ts.Expression): boolean {
       e.kind === ts.SyntaxKind.TrueKeyword || e.kind === ts.SyntaxKind.FalseKeyword) return true;
   if (ts.isParenthesizedExpression(e)) return isConstExpr(ctx, e.expression);
   if (ts.isAsExpression(e) || ts.isSatisfiesExpression(e)) return isConstExpr(ctx, e.expression);
-  if (ts.isBinaryExpression(e)) return isConstExpr(ctx, e.left) && isConstExpr(ctx, e.right);
+  if (ts.isBinaryExpression(e)) {
+    const k = e.operatorToken.kind;
+    // ?? always emits an IIFE; ||/&& only stay const on bool operands —
+    // non-bool operands become zero-value IIFEs, which consts can't hold
+    if (k === ts.SyntaxKind.QuestionQuestionToken) return false;
+    if (k === ts.SyntaxKind.BarBarToken || k === ts.SyntaxKind.AmpersandAmpersandToken) {
+      const t = tsRealType(ctx, e.left);
+      const boolish = t != null && (t.flags & ts.TypeFlags.BooleanLike) !== 0;
+      if (!boolish) return false;
+    }
+    return isConstExpr(ctx, e.left) && isConstExpr(ctx, e.right);
+  }
   if (ts.isPrefixUnaryExpression(e)) return isConstExpr(ctx, e.operand);
-  if (ts.isIdentifier(e)) return true; // assume it names another const
+  if (ts.isIdentifier(e)) return ctx.consts.has(e.text);
   if (ts.isPropertyAccessExpression(e) && ts.isIdentifier(e.expression) && ctx.enums.has(e.expression.text)) return true;
   return false;
 }
@@ -1404,9 +1732,14 @@ function inferTypeLocal(ctx: Ctx, e: ts.Expression): string {
   return "any";
 }
 
-function binary(ctx: Ctx, b: ts.BinaryExpression): string {
+function binary(ctx: Ctx, b: ts.BinaryExpression, want?: ts.TypeNode): string {
   const op = b.operatorToken.kind;
   const l = () => ex(ctx, b.left), r = () => ex(ctx, b.right);
+  const isBoolOperand = (e: ts.Expression): boolean => {
+    if (rawGoType(ctx, e) === "bool") return true;
+    const t = tsRealType(ctx, e);
+    return t != null && (t.flags & ts.TypeFlags.BooleanLike) !== 0;
+  };
   switch (op) {
     case ts.SyntaxKind.EqualsEqualsEqualsToken:
     case ts.SyntaxKind.EqualsEqualsToken: return `${l()} == ${r()}`;
@@ -1415,11 +1748,58 @@ function binary(ctx: Ctx, b: ts.BinaryExpression): string {
     case ts.SyntaxKind.AsteriskAsteriskToken: ctx.uses.add("math"); return `math.Pow(${l()}, ${r()})`;
     case ts.SyntaxKind.AsteriskAsteriskEqualsToken: ctx.uses.add("math"); return `${l()} = math.Pow(${l()}, ${r()})`;
     case ts.SyntaxKind.InstanceOfKeyword: {
-      const t = b.right.getText();
+      // x instanceof C -> type assert; class instances are *C in Go.
+      // A statically non-nilable LHS (int, string, struct) can never match.
+      const tn = b.right.getText();
+      const lt = rawGoType(ctx, b.left);
+      if (lt && lt !== "any" && !isNilableGo(lt)) return "false";
+      const t = tn === "Error" ? "error" : ctx.classes.has(tn) ? "*" + qname(ctx, tn) : qname(ctx, tn);
       return `(func() bool {\n_, ok := ${l()}.(${t})\nreturn ok\n})()`;
     }
-    case ts.SyntaxKind.InKeyword: fail(ctx, b, "'in' is not supported — use m[k] with the two-value form"); return "false";
-    case ts.SyntaxKind.QuestionQuestionToken: fail(ctx, b, "'??' is not supported — check for nil explicitly"); return l();
+    case ts.SyntaxKind.InKeyword: {
+      // k in m -> ok-form map lookup; i in slice -> bounds check
+      const rt0 = rawGoType(ctx, b.right) ?? "";
+      if (rt0.startsWith("[]")) {
+        const i = `__i${ctx.tmpN++}`;
+        return `(func() bool {\n${i} := ${l()}\nreturn ${i} >= 0 && ${i} < len(${r()})\n})()`;
+      }
+      return `(func() bool {\n_, ok := ${r()}[${l()}]\nreturn ok\n})()`;
+    }
+    case ts.SyntaxKind.QuestionQuestionToken: {
+      // a?.b ?? c — fuse into one nil-check so the zero value doesn't swallow c
+      const qd = qdLeft(ctx, b.left);
+      if (qd) {
+        const rlt = rawGoType(ctx, qd.recv);
+        if (!rlt || isNilableGo(rlt)) {
+          const rt = want ? emitType(ctx, want) : checkedGoType(ctx, b.left) ?? "any";
+          return `(func() ${rt} {\n__q := ${ex(ctx, qd.recv)}\nif __q == nil {\nreturn ${r()}\n}\nreturn ${qd.tail("__q")}\n})()`;
+        }
+      }
+      // a ?? b -> nil-guarded IIFE; non-nilable LHS collapses to just `a`
+      const lt = rawGoType(ctx, b.left);
+      const rt = want ? emitType(ctx, want) : lt ?? "any";
+      if (lt && !isNilableGo(lt)) return l();
+      const re = r();
+      // `a ?? plainValue` where the target is *T — take the value's address
+      const bt = rawGoType(ctx, b.right);
+      const reFix = rt.startsWith("*") && bt && !isNilableGo(bt) && baseType(bt) === baseType(rt.slice(1)) ? `&${re}` : re;
+      return `(func() ${rt} {\nif ${l()} != nil {\nreturn ${l()}\n}\nreturn ${reFix}\n})()`;
+    }
+    case ts.SyntaxKind.BarBarToken: {
+      if (isBoolOperand(b.left)) return `${l()} || ${r()}`;
+      // JS truthiness: falsy LHS yields RHS — map to Go zero values
+      const rt = want ? emitType(ctx, want) : rawGoType(ctx, b.left) ?? rawGoType(ctx, b.right) ?? "any";
+      return `(func() ${rt} {\nif ${truthy(ctx, b.left)} {\nreturn ${l()}\n}\nreturn ${r()}\n})()`;
+    }
+    case ts.SyntaxKind.AmpersandAmpersandToken: {
+      if (isBoolOperand(b.left)) return `${l()} && ${r()}`;
+      const rt = want ? emitType(ctx, want) : rawGoType(ctx, b.left) ?? "any";
+      return `(func() ${rt} {\nif ${truthy(ctx, b.left)} {\nreturn ${r()}\n}\nreturn ${l()}\n})()`;
+    }
+    case ts.SyntaxKind.QuestionQuestionEqualsToken:
+    case ts.SyntaxKind.BarBarEqualsToken:
+    case ts.SyntaxKind.AmpersandAmpersandEqualsToken:
+      fail(ctx, b, "'??='/'||='/'&&=' are only supported as statements"); return l();
     case ts.SyntaxKind.CommaToken: fail(ctx, b, "comma expressions are not supported"); return r();
     default: {
       const tok = b.operatorToken.getText();
@@ -1511,8 +1891,13 @@ function memberName(ctx: Ctx, recv: ts.Expression, prop: string): string {
   return prop;
 }
 
-function propAccess(ctx: Ctx, p: ts.PropertyAccessExpression): string {
+function propAccess(ctx: Ctx, p: ts.PropertyAccessExpression, want?: ts.TypeNode): string {
   const prop = p.name.text;
+  // a?.b — nil-guarded access (a?.length keeps len() inside the guard)
+  if (p.questionDotToken) {
+    if (prop === "length") return optChain(ctx, p.expression, r => `len(${r})`, want, p);
+    return optChain(ctx, p.expression, r => `${r}.${memberName(ctx, p.expression, prop)}`, want, p);
+  }
   if (prop === "length") return `len(${ex(ctx, p.expression)})`;
   // Class.prototype.method -> (*Class).Method — Go's method-expression form,
   // used when registering handlers by type rather than instance
@@ -1530,14 +1915,32 @@ function propAccess(ctx: Ctx, p: ts.PropertyAccessExpression): string {
     if (p.expression.text === "process" && prop === "argv") { ctx.uses.add("os"); return "os.Args"; }
     if (p.expression.text === "Math") { ctx.uses.add("math"); return "math." + prop[0].toUpperCase() + prop.slice(1); }
   }
+  // getter access -> a.GetProp() — accessors emit as methods
+  const rt = typeNameOf(ctx, p.expression);
+  if (rt && ctx.getterOf.get(baseType(rt))?.has(prop))
+    return `${ex(ctx, p.expression)}.${cap(prop)}()`;
   return `${ex(ctx, p.expression)}.${memberName(ctx, p.expression, prop)}`;
 }
 
 function call(ctx: Ctx, c: ts.CallExpression, want?: ts.TypeNode): string {
   const callee = c.expression;
   const typeArgs = c.typeArguments?.length ? `[${c.typeArguments.map(t => emitType(ctx, t, false, true)).join(", ")}]` : "";
-  const args = (spread = false) =>
-    c.arguments.map(a => ts.isSpreadElement(a) ? `${ex(ctx, a.expression)}...` : ex(ctx, a)).join(", ");
+  const args = (defs?: (ts.Expression | undefined)[]) =>
+    padArgs(ctx, c, defs);
+
+  // a?.f(x) — the ?. lives on the property access; a.f?.(x) on the call
+  if (ts.isPropertyAccessExpression(callee) && callee.questionDotToken) {
+    const obj = callee.expression, prop = callee.name.text;
+    return optChain(ctx, obj, r =>
+      `${r}.${memberName(ctx, obj, prop)}(${args(methodDefsOf(ctx, obj, prop))})`, want, c);
+  }
+  if (c.questionDotToken) {
+    // callee itself may be nil: a?.(x) / a.f?.(x)
+    const recv = ts.isPropertyAccessExpression(callee)
+      ? ex(ctx, callee)
+      : ts.isIdentifier(callee) ? callee.text : ex(ctx, callee);
+    return `(func() ${want ? emitType(ctx, want) : "any"} {\nif ${recv} == nil {\nreturn nil\n}\nreturn ${recv}(${args()})\n})()`;
+  }
 
   // builtins
   if (ts.isIdentifier(callee)) {
@@ -1569,7 +1972,7 @@ function call(ctx: Ctx, c: ts.CallExpression, want?: ts.TypeNode): string {
       fail(ctx, c, `'${name}(...)' must be used as a statement, not inside an expression`);
       return "nil";
     }
-    return `${name}${typeArgs}(${args()})`;
+    return `${name}${typeArgs}(${args(ctx.funcDefaults.get(name))})`;
   }
 
   if (ts.isPropertyAccessExpression(callee)) {
@@ -1579,7 +1982,11 @@ function call(ctx: Ctx, c: ts.CallExpression, want?: ts.TypeNode): string {
     // console.* -> fmt.*
     if (ts.isIdentifier(obj) && obj.text === "console") {
       ctx.uses.add("fmt");
-      if (prop === "error" || prop === "warn") { ctx.uses.add("os"); return `fmt.Fprintln(os.Stderr, ${args()})`; }
+      // fmt.Println(...any) can't take []T spread — convert to []any first
+      const anyArgs = () => c.arguments.map(a => ts.isSpreadElement(a)
+        ? `(func() []any { __s := make([]any, len(${ex(ctx, a.expression)})); for __i, __v := range ${ex(ctx, a.expression)} { __s[__i] = __v }; return __s }())...`
+        : ex(ctx, a)).join(", ");
+      if (prop === "error" || prop === "warn") { ctx.uses.add("os"); return `fmt.Fprintln(os.Stderr, ${anyArgs()})`; }
       // console.log(`a ${x}`) -> fmt.Printf("a %v\n", x)
       if (c.arguments.length === 1 && ts.isTemplateExpression(c.arguments[0])) {
         const t = c.arguments[0] as ts.TemplateExpression;
@@ -1591,7 +1998,7 @@ function call(ctx: Ctx, c: ts.CallExpression, want?: ts.TypeNode): string {
         }
         return `fmt.Printf(${JSON.stringify(parts.join("") + "\n")}, ${vals.join(", ")})`;
       }
-      return `fmt.Println(${args()})`;
+      return `fmt.Println(${anyArgs()})`;
     }
     if (ts.isIdentifier(obj) && obj.text === "process" && prop === "exit") {
       ctx.uses.add("os"); return `os.Exit(${args()})`;
@@ -1641,7 +2048,7 @@ function call(ctx: Ctx, c: ts.CallExpression, want?: ts.TypeNode): string {
     if (ts.isIdentifier(obj) && ctx.classes.get(obj.text)?.statics.has(prop)) {
       return `${obj.text}_${prop}${typeArgs}(${args()})`;
     }
-    return `${ex(ctx, obj)}.${memberName(ctx, obj, prop)}${typeArgs}(${args()})`;
+    return `${ex(ctx, obj)}.${memberName(ctx, obj, prop)}${typeArgs}(${args(methodDefsOf(ctx, obj, prop))})`;
   }
 
   if (callee.kind === ts.SyntaxKind.SuperKeyword) {
@@ -1650,6 +2057,36 @@ function call(ctx: Ctx, c: ts.CallExpression, want?: ts.TypeNode): string {
   }
 
   return `${ex(ctx, callee)}${typeArgs}(${args()})`;
+}
+
+// method default-param table for obj.prop calls (instance or static — both
+// register under the class name)
+function methodDefsOf(ctx: Ctx, obj: ts.Expression, prop: string): (ts.Expression | undefined)[] | undefined {
+  const t = ts.isIdentifier(obj) && ctx.classes.has(obj.text) ? obj.text : typeNameOf(ctx, obj);
+  return t ? ctx.methodDefaults.get(baseType(t))?.get(prop) : undefined;
+}
+
+// call args with default-param padding: missing trailing args and explicit
+// `undefined` are filled from the callee's declared defaults — Go has no
+// optional params, so callers must always pass the full list
+function padArgs(ctx: Ctx, c: ts.CallExpression, defs?: (ts.Expression | undefined)[]): string {
+  if (!defs) {
+    return c.arguments.map(a => ts.isSpreadElement(a) ? `${ex(ctx, a.expression)}...` : ex(ctx, a)).join(", ");
+  }
+  const out: string[] = [];
+  const n = Math.max(c.arguments.length, defs.length);
+  for (let i = 0; i < n; i++) {
+    const a = c.arguments[i];
+    if (!a) {
+      if (defs[i]) { out.push(ex(ctx, defs[i])); continue; }
+      if (i < defs.length) fail(ctx, c, `missing argument ${i + 1} — parameter has no default`);
+      continue;
+    }
+    if (ts.isSpreadElement(a)) { out.push(`${ex(ctx, a.expression)}...`); continue; }
+    if (ts.isIdentifier(a) && a.text === "undefined" && defs[i]) { out.push(ex(ctx, defs[i])); continue; }
+    out.push(ex(ctx, a));
+  }
+  return out.join(", ");
 }
 
 // arr.map((x: int) => e)  ->  IIFE building a new slice
