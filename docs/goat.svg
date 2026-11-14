@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <rect width="256" height="256" rx="48" fill="#00ADD8"/>
-  <!-- horns: short tapered spikes -->
-  <path d="M92 72 C80 58 74 46 73 28 C86 46 96 56 106 62 Z" fill="#6B4F3B"/>
-  <path d="M164 72 C176 58 182 46 183 28 C170 46 160 56 150 62 Z" fill="#6B4F3B"/>
+  <!-- horns: bold swept-back blades -->
+  <path d="M104 66 C68 56 50 34 58 10 C38 30 50 66 90 80 Z" fill="#6B4F3B"/>
+  <path d="M152 66 C188 56 206 34 198 10 C218 30 206 66 166 80 Z" fill="#6B4F3B"/>
   <!-- ears -->
   <ellipse cx="60" cy="122" rx="24" ry="13" transform="rotate(-28 60 122)" fill="#E3D5C0"/>
   <ellipse cx="196" cy="122" rx="24" ry="13" transform="rotate(28 196 122)" fill="#E3D5C0"/>
