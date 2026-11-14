@@ -1,29 +1,21 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <rect width="256" height="256" rx="48" fill="#00ADD8"/>
-  <!-- horns: bold swept-back blades -->
-  <path d="M104 66 C68 56 50 34 58 10 C38 30 50 66 90 80 Z" fill="#6B4F3B"/>
-  <path d="M152 66 C188 56 206 34 198 10 C218 30 206 66 166 80 Z" fill="#6B4F3B"/>
-  <!-- ears -->
-  <ellipse cx="60" cy="122" rx="24" ry="13" transform="rotate(-28 60 122)" fill="#E3D5C0"/>
-  <ellipse cx="196" cy="122" rx="24" ry="13" transform="rotate(28 196 122)" fill="#E3D5C0"/>
-  <!-- face -->
-  <path d="M128 62 C162 62 186 96 186 136 C186 178 160 214 128 214 C96 214 70 178 70 136 C70 96 94 62 128 62 Z" fill="#FBF7EF"/>
-  <!-- forelock -->
-  <path d="M104 66 Q128 46 152 66 Q128 56 104 66 Z" fill="#E3D5C0"/>
-  <!-- happy arched eyes -->
-  <path d="M94 130 Q106 114 118 130" stroke="#263238" stroke-width="7" fill="none" stroke-linecap="round"/>
-  <path d="M138 130 Q150 114 162 130" stroke="#263238" stroke-width="7" fill="none" stroke-linecap="round"/>
-  <!-- blush cheeks -->
-  <ellipse cx="88" cy="152" rx="11" ry="8" fill="#F5A79F" opacity="0.85"/>
-  <ellipse cx="168" cy="152" rx="11" ry="8" fill="#F5A79F" opacity="0.85"/>
-  <!-- muzzle -->
-  <ellipse cx="128" cy="180" rx="38" ry="25" fill="#E3D5C0"/>
-  <!-- nostrils -->
-  <circle cx="116" cy="172" r="4" fill="#263238"/>
-  <circle cx="140" cy="172" r="4" fill="#263238"/>
-  <!-- open grin + tongue -->
-  <path d="M110 182 Q128 210 146 182 Q128 194 110 182 Z" fill="#7A4034"/>
-  <path d="M119 191 Q128 199 137 191 Q128 206 119 191 Z" fill="#F5A79F"/>
-  <!-- beard tuft -->
-  <path d="M117 203 Q128 222 139 203 L134 234 Q128 239 122 234 Z" fill="#E3D5C0"/>
+  <g fill="#263238">
+    <!-- horns: bold swept-back arcs -->
+    <path d="M200 74 C172 46 152 26 154 6 C136 20 138 48 160 68 C172 78 188 84 198 86 Z"/>
+    <path d="M206 80 C184 60 168 42 168 22 C154 36 158 62 178 76 C186 82 196 86 204 88 Z"/>
+    <!-- legs -->
+    <g stroke="#263238" stroke-width="13" stroke-linecap="round" fill="none">
+      <path d="M76 160 L70 214"/>
+      <path d="M94 165 L92 216"/>
+      <path d="M166 156 L168 214"/>
+      <path d="M182 154 L190 212"/>
+    </g>
+    <!-- body, neck, profile head, beard, tail -->
+    <path d="M38 90 C44 92 50 98 56 106 C100 98 150 96 172 100 C184 92 192 82 198 72 C208 82 222 98 234 108 C237 113 234 118 229 121 C224 125 219 126 215 126 C213 132 211 140 206 146 C202 139 200 133 199 128 C194 129 190 129 186 128 C184 140 182 150 179 158 C150 169 118 171 96 167 C82 165 72 163 67 158 C58 151 51 141 47 130 C43 117 41 103 38 90 Z"/>
+    <!-- ear -->
+    <path d="M200 88 C188 80 174 80 166 88 C176 96 190 98 200 94 Z"/>
+  </g>
+  <!-- eye (background cutout) -->
+  <circle cx="214" cy="100" r="5" fill="#00ADD8"/>
 </svg>
