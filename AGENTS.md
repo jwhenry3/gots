@@ -39,14 +39,21 @@ nestgo/                 the app + framework (module path: nestgo)
 ## Commands
 
 ```bash
-# transpile (from gots/)
+# preferred — root package.json scripts (run from repo root)
+npm run dev         # transpile nestgo/src + go run (PORT env, default :3000)
+npm run build       # transpile + go -C nestgo build ./...
+npm run verify      # typecheck + examples + build
+npm run check       # gots check nestgo/src
+npm run clean       # delete generated .go next to .ts (keeps nestgo/nest)
+
+# direct — from gots/
 node src/cli.ts build ../nestgo/src/     # recursive — writes .go next to .ts
 node src/cli.ts check <file|dir>         # typecheck only
 node src/cli.ts run   <file|dir>         # transpile + go run
 
-# Go side (from nestgo/)
+# Go side — from nestgo/
 go build ./...         # framework + generated code
-go run ./src/          # runs on :PORT (default :3000), or PORT=3210 go run ./src/
+go run ./src/          # runs on :PORT (default :3000)
 
 # typecheck the transpiler's own sources
 cd gots && npx tsc -p tsconfig.json
