@@ -9,10 +9,10 @@
   <!-- inner ear contour -->
   <ellipse cx="62" cy="122" rx="13" ry="6" transform="rotate(-28 62 122)" fill="#D8C3A8"/>
   <ellipse cx="194" cy="122" rx="13" ry="6" transform="rotate(28 194 122)" fill="#D8C3A8"/>
-  <!-- face -->
-  <path d="M128 62 C162 62 186 96 186 136 C186 178 160 214 128 214 C96 214 70 178 70 136 C70 96 94 62 128 62 Z" fill="#FBF7EF"/>
+  <!-- face: broad brow tapering to the chin -->
+  <path d="M128 58 C160 58 186 88 186 124 C186 154 168 186 146 202 C140 207 134 210 128 210 C122 210 116 207 110 202 C88 186 70 154 70 124 C70 88 96 58 128 58 Z" fill="#FBF7EF"/>
   <!-- cheek shade contour -->
-  <path d="M128 62 C162 62 186 96 186 136 C186 178 160 214 128 214 C164 206 176 170 172 132 C168 96 148 66 128 62 Z" fill="#F0E6D4"/>
+  <path d="M128 58 C160 58 186 88 186 124 C186 154 168 186 146 202 C140 207 134 210 128 210 C158 200 174 162 172 126 C170 92 150 60 128 58 Z" fill="#F0E6D4"/>
   <!-- forelock -->
   <path d="M104 66 Q128 46 152 66 Q128 56 104 66 Z" fill="#E3D5C0"/>
   <!-- brow contour -->
