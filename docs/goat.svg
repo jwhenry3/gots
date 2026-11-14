@@ -16,7 +16,7 @@
     <path d="M174 76 C190 82 202 96 204 114 C194 106 182 92 170 80 Z" fill="#D8C3A8"/>
   </g>
   <!-- head: two overlapping ovals — broad cranium + narrow jaw -->
-  <ellipse cx="128" cy="106" rx="58" ry="60" fill="#FBF7EF"/>
+  <ellipse cx="128" cy="106" rx="66" ry="52" fill="#FBF7EF"/>
   <ellipse cx="128" cy="166" rx="30" ry="46" fill="#FBF7EF"/>
   <!-- cheek shade contour -->
   <path d="M128 56 C164 56 186 80 186 108 C186 136 162 156 128 156 C156 148 172 128 172 104 C172 76 152 56 128 56 Z" fill="#F0E6D4"/>
