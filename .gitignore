@@ -30,3 +30,6 @@ Thumbs.db
 dist/
 out/
 coverage*.html
+
+# tool artifacts
+.playwright-mcp/
