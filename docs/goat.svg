@@ -22,13 +22,13 @@
   <!-- eyes: horizontal goat pupils -->
   <rect x="94" y="122" width="24" height="11" rx="5.5" fill="#263238"/>
   <rect x="138" y="122" width="24" height="11" rx="5.5" fill="#263238"/>
-  <!-- snout: wide at the bridge, tapering to the chin -->
-  <path d="M94 166 C94 150 110 142 128 142 C146 142 162 150 162 166 C162 186 146 204 128 206 C110 204 94 186 94 166 Z" fill="#E3D5C0"/>
+  <!-- snout: small tint hugging the chin edge -->
+  <path d="M104 176 C104 162 115 156 128 156 C141 156 152 162 152 176 C152 192 141 206 128 208 C115 206 104 192 104 176 Z" fill="#E3D5C0"/>
   <!-- nostrils -->
-  <circle cx="117" cy="178" r="4" fill="#263238"/>
-  <circle cx="139" cy="178" r="4" fill="#263238"/>
+  <circle cx="118" cy="188" r="4" fill="#263238"/>
+  <circle cx="138" cy="188" r="4" fill="#263238"/>
   <!-- mouth line -->
-  <path d="M119 196 Q128 202 137 196" stroke="#263238" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <path d="M121 196 Q128 200 135 196" stroke="#263238" stroke-width="3.5" fill="none" stroke-linecap="round"/>
   <!-- rough spiky chin beard -->
   <path d="M112 201 Q128 206 144 203 L142 218 L140 234 L136 218 L132 240 L128 222 L124 242 L120 222 L116 236 L114 216 Z" fill="#E3D5C0"/>
 </svg>
