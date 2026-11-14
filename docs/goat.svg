@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
   <rect width="256" height="256" rx="48" fill="#00ADD8"/>
   <!-- horns: large tapered points -->
-  <path d="M96 74 Q118 50 96 8 Q104 44 116 64 Z" fill="#6B4F3B"/>
-  <path d="M160 74 Q138 50 160 8 Q152 44 140 64 Z" fill="#6B4F3B"/>
+  <path d="M76 10 Q112 40 100 72 L86 78 Q88 40 76 10 Z" fill="#6B4F3B"/>
+  <path d="M180 10 Q144 40 156 72 L170 78 Q168 40 180 10 Z" fill="#6B4F3B"/>
   <!-- rough spiky chin beard (under head layer) -->
   <path d="M112 201 Q128 206 144 203 L142 218 L140 234 L136 218 L132 240 L128 222 L124 242 L120 222 L116 236 L114 216 Z" fill="#E3D5C0"/>
   <!-- ears: long floppy, curving down like a horn -->
