@@ -6,8 +6,11 @@
     "strict": false,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["node"],
-    "plugins": [{ "name": "./plugin" }]
+    "plugins": [
+      {
+        "name": "./plugin"
+      }
+    ]
   },
   "include": [
     "types/**/*.d.ts",

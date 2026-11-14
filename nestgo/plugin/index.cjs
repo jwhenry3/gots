@@ -5,7 +5,7 @@
 //
 // Registered via tsconfig.json: "plugins": [{ "name": "./plugin" }]
 
-const { gotsDiagnostics } = require("../src/checks.cjs");
+const { gotsDiagnostics } = require("./checks.cjs");
 
 function init(/* { typescript: tss } */) {
   function create(info) {
