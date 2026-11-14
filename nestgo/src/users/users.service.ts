@@ -3,7 +3,7 @@
 // constructor seeds the in-memory store — it emits as NewUsersService(),
 // which is exactly what the DI container calls by type.
 
-import * as nest from "nestgo/nest"
+import nest from "nestgo/nest"
 import * as fmt from "fmt"
 import * as sync from "sync"
 import { CreateUserDto, UpdateUserDto } from "./dto/users.dto"

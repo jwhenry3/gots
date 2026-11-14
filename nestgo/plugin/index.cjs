@@ -5,7 +5,7 @@
 //
 // Registered via tsconfig.json: "plugins": [{ "name": "./plugin" }]
 
-const { gotsDiagnostics } = require("./checks.cjs");
+const { allDiagnostics } = require("./checks.cjs");
 
 function init(/* { typescript: tss } */) {
   function create(info) {
@@ -19,7 +19,7 @@ function init(/* { typescript: tss } */) {
       const prior = ls.getSemanticDiagnostics(fileName);
       if (fileName.endsWith(".d.ts") || !fileName.endsWith(".ts")) return prior;
       const sf = ls.getProgram()?.getSourceFile(fileName);
-      return sf ? prior.concat(gotsDiagnostics(sf)) : prior;
+      return sf ? prior.concat(allDiagnostics(sf)) : prior;
     };
     return proxy;
   }

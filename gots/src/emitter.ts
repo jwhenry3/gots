@@ -326,13 +326,13 @@ function run(sf: ts.SourceFile, file: string, checker: ts.TypeChecker | undefine
     const kind = d.category === ts.DiagnosticCategory.Error ? "error" : "warning";
     errors.push(`${file}:${line + 1}:${character + 1}: ${kind} TS${d.code}: ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`);
   }
-  if (errors.length) return { code: "", errors };
-
   // gots-specific rules the TS checker can't see (literal values) —
   // shared with plugin/index.cjs so the editor reports the same errors.
-  for (const d of checks.gotsDiagnostics(sf)) {
+  // Runs even when TS diagnostics exist — unsupported constructs (unions,
+  // generators, export default...) should still flag alongside them.
+  for (const d of (checks.allDiagnostics ?? checks.gotsDiagnostics)(sf)) {
     const { line, character } = ts.getLineAndCharacterOfPosition(sf, d.start);
-    errors.push(`${file}:${line + 1}:${character + 1}: ${d.messageText}`);
+    errors.push(`${file}:${line + 1}:${character + 1}: gots: ${d.messageText}`);
   }
   if (errors.length) return { code: "", errors };
 
@@ -438,7 +438,20 @@ function run(sf: ts.SourceFile, file: string, checker: ts.TypeChecker | undefine
   // pass 2 — emit
   for (const st of sf.statements) {
     if (ts.isImportDeclaration(st)) { collectImport(ctx, st, imports); continue; }
-    if (ts.isExportDeclaration(st) || ts.isExportAssignment(st)) continue; // `export { A }` — Go packages export by case
+    if (ts.isExportDeclaration(st)) {
+      // `export {A}` — fine, Go exports by case; `export *`/`* as default` — no equivalent
+      if (!st.exportClause) fail(ctx, st, "'export *' is not supported — packages export by name capitalization");
+      else for (const el of st.exportClause.elements)
+        if (el.name.text === "default")
+          fail(ctx, el, "gots has no default exports — the package itself is the default import");
+      continue;
+    }
+    if (ts.isExportAssignment(st)) {
+      // `export default <decl>` is a Class/FunctionDeclaration (not this node);
+      // this is `export default <expr>` / `export =`
+      fail(ctx, st, "'export default <expr>' is not supported — the package itself is the default import; export the value by name");
+      continue;
+    }
     if (isTopLevelDecl(st)) {
       if (ts.isFunctionDeclaration(st) && st.name?.text === "main") declaredMain = true;
       emitTop(ctx, w, st);
@@ -871,6 +884,7 @@ function stmt(ctx: Ctx, w: W, st: ts.Statement) {
     }
     case ts.SyntaxKind.ForOfStatement: {
       const n = st as ts.ForOfStatement;
+      if (n.awaitModifier) { fail(ctx, n, "'for await' is not supported — range over a channel"); return; }
       // ranging a channel takes one variable; slices/maps need the index slot
       const isChan = ts.isIdentifier(n.expression) &&
         (ctx.varTypes.get(n.expression.text) ?? "").startsWith("chan ");
@@ -946,6 +960,11 @@ function emitBlockStmts(ctx: Ctx, w: W, s: ts.Statement) {
 
 function emitVar(ctx: Ctx, w: W, st: ts.VariableStatement, topLevel: boolean) {
   const isConst = (st.declarationList.flags & ts.NodeFlags.Const) !== 0;
+  // AwaitUsing is a mask (Const|Using) — the Using bit alone covers both
+  if (st.declarationList.flags & ts.NodeFlags.Using) {
+    fail(ctx, st, "'using' declarations are not supported — call Close() or defer it");
+    return;
+  }
   for (const d of st.declarationList.declarations) {
     // let [a, b] = f()  ->  a, b := f()   (Go multiple return values)
     if (ts.isArrayBindingPattern(d.name)) {
@@ -1006,6 +1025,8 @@ function emitVar(ctx: Ctx, w: W, st: ts.VariableStatement, topLevel: boolean) {
 }
 
 function emitFunc(ctx: Ctx, w: W, f: ts.FunctionDeclaration, nested: boolean) {
+  if (!f.body) { fail(ctx, f, "overloads and 'declare' signatures are not supported — gots needs a body (declare belongs in .d.ts)"); return; }
+  if (f.asteriskToken) { fail(ctx, f, "generator functions are not supported — use channels or slices"); return; }
   if (!f.name) { fail(ctx, f, "anonymous function declarations are not supported"); return; }
   const name = f.name.text;
   if (nested && f.typeParameters?.length) {
@@ -1252,42 +1273,59 @@ function importUsed(i: { alias: string; path: string; names?: string[] }, body: 
 function collectImport(ctx: Ctx, st: ts.ImportDeclaration, imports: { alias: string; path: string; names?: string[] }[]) {
   const path = st.moduleSpecifier.getText().replace(/^['"]|['"]$/g, "");
   const clause = st.importClause;
+  // In gots a default import IS the package: `import nest from "nestgo/nest"`
+  // -> `import nest "nestgo/nest"`. Named bindings combine freely:
+  // `import d, {a} from "p"` -> alias + named, `import d, * as ns` -> one alias.
+  const named = clause?.namedBindings && ts.isNamedImports(clause.namedBindings) ? clause.namedBindings.elements : undefined;
+  const ns = clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings) ? clause.namedBindings : undefined;
+
   if (path.startsWith(".")) {
     // relative import — same dir = same Go package (strip entirely, recording
     // `import {X as Y}` aliases); a different dir is a cross-package import
     const targetDir = pathResolve(ctx.file, "..", path, "..");
     const targetPkg = targetDir === ctx.rootDir ? "main" : pathBasename(targetDir);
     if (targetPkg === ctx.pkg) {
-      if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings))
-        for (const el of clause.namedBindings.elements)
+      if (clause?.name)
+        fail(ctx, st, `default import '${clause.name.text}' from a same-package file has no package to bind — use named imports`);
+      if (ns)
+        fail(ctx, st, `namespace imports from same-package files have no package to bind — import the names directly`);
+      if (named)
+        for (const el of named)
           ctx.aliasOf.set(el.name.text, (el.propertyName ?? el.name).text);
       return;
     }
     const goPath = ctx.pkgPath.get(targetPkg) ?? targetPkg;
-    if (clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
-      imports.push({ alias: clause.namedBindings.name.text, path: goPath });
+    if (clause?.name) {
+      imports.push({ alias: clause.name.text, path: goPath });
+      if (ns) ctx.aliasOf.set(ns.name.text, clause.name.text);
+      if (named)
+        for (const el of named)
+          ctx.aliasOf.set(el.name.text, `${clause.name.text}.${(el.propertyName ?? el.name).text}`);
       return;
     }
+    if (ns) { imports.push({ alias: ns.name.text, path: goPath }); return; }
     imports.push({ alias: "", path: goPath });
-    if (clause?.namedBindings && ts.isNamedImports(clause.namedBindings))
-      for (const el of clause.namedBindings.elements)
+    if (named)
+      for (const el of named)
         ctx.aliasOf.set(el.name.text, targetPkg + "." + (el.propertyName ?? el.name).text);
     return;
   }
-  if (path === "nestgo/nest" && clause?.namedBindings && ts.isNamespaceImport(clause.namedBindings))
-    ctx.nestAlias = clause.namedBindings.name.text;
+
+  if (path === "nestgo/nest") {
+    const nestName = ns ? ns.name.text : clause?.name?.text;
+    if (nestName) ctx.nestAlias = nestName;
+  }
   if (!clause) { imports.push({ alias: "", path }); return; }
-  if (clause.namedBindings && ts.isNamedImports(clause.namedBindings)) {
+  if (clause.name) imports.push({ alias: clause.name.text, path });
+  if (named) {
     // import { Println } from "fmt"  ->  import . "fmt"
-    imports.push({ alias: ".", path, names: clause.namedBindings.elements.map(e => e.name.text) });
-    return;
+    imports.push({ alias: ".", path, names: named.map(e => e.name.text) });
   }
-  if (clause.namedBindings && ts.isNamespaceImport(clause.namedBindings)) {
-    imports.push({ alias: clause.namedBindings.name.text, path });
-    return;
+  if (ns) {
+    if (clause.name) ctx.aliasOf.set(ns.name.text, clause.name.text); // d, * as ns — same package
+    else imports.push({ alias: ns.name.text, path });
   }
-  if (clause.name) { imports.push({ alias: clause.name.text, path }); return; }
-  imports.push({ alias: "", path });
+  if (!clause.name && !clause.namedBindings) imports.push({ alias: "", path });
 }
 
 // ---------- classes / interfaces / enums ----------
@@ -1316,7 +1354,14 @@ function emitClass(ctx: Ctx, w: W, d: ts.ClassDeclaration) {
   const paramProps: { name: string; type: string }[] = [];
 
   for (const m of d.members) {
-    if (ts.isPropertyDeclaration(m)) (hasMod(m, ts.SyntaxKind.StaticKeyword) ? staticFields : fields).push(m);
+    if (ts.isPropertyDeclaration(m)) {
+      if (ts.isPrivateIdentifier(m.name)) { fail(ctx, m, "#private fields are not supported — use the 'private' keyword"); continue; }
+      if (hasMod(m, ts.SyntaxKind.AccessorKeyword)) { fail(ctx, m, "auto-accessors are not supported — write explicit get/set"); continue; }
+      (hasMod(m, ts.SyntaxKind.StaticKeyword) ? staticFields : fields).push(m);
+    }
+    else if (ts.isClassStaticBlockDeclaration(m)) fail(ctx, m, "static blocks are not supported — initialize in a package-level var or init()");
+    else if (ts.isMethodDeclaration(m) && !m.body) fail(ctx, m, "method overloads are not supported — Go has one signature per method");
+    else if (ts.isMethodDeclaration(m) && m.asteriskToken) fail(ctx, m, "generator methods are not supported");
     else if (ts.isMethodDeclaration(m)) (hasMod(m, ts.SyntaxKind.StaticKeyword) ? staticMethods : methods).push(m);
     else if (ts.isConstructorDeclaration(m)) {
       ctor = m;
@@ -1343,7 +1388,8 @@ function emitClass(ctx: Ctx, w: W, d: ts.ClassDeclaration) {
   if (info?.embeds) w.w("*" + info.embeds);
   for (const f of fields) {
     const fname = f.name.getText();
-    const t = f.type ? emitType(ctx, f.type) : (f.initializer ? inferType(ctx, f.initializer) : "any");
+    let t = f.type ? emitType(ctx, f.type) : (f.initializer ? inferType(ctx, f.initializer) : "any");
+    if (f.questionToken && !isNilableGo(t)) t = "*" + t; // x?: T -> *T
     w.w(`${cap(fname)} ${t} \`json:"${fname}"\``);
   }
   for (const pp of paramProps) if (!fields.some(f => f.name.getText() === pp.name)) w.w(`${cap(pp.name)} ${pp.type} \`json:"${pp.name}"\``);
@@ -1531,6 +1577,7 @@ function ex(ctx: Ctx, e: ts.Expression, want?: ts.TypeNode): string {
     case ts.SyntaxKind.Identifier: {
       const id = (e as ts.Identifier).text;
       if (id === "undefined") return "nil";
+      if (id === "arguments") { fail(ctx, e, "'arguments' is not supported — use rest params (...args)"); return "nil"; }
       // a @Module class used as a value -> its module factory call
       if (ctx.modules.has(id)) return `${qNew(ctx, id)}()`;
       if (ctx.aliasOf.has(id)) return ctx.aliasOf.get(id)!;
@@ -1601,6 +1648,10 @@ function ex(ctx: Ctx, e: ts.Expression, want?: ts.TypeNode): string {
       if (name === "Array" && tas.length === 1)
         return `make([]${emitType(ctx, tas[0])}, ${args || "0"})`;
       if (name === "Error") { ctx.uses.add("errors"); return `errors.New(${args})`; }
+      if (name === "Channel" || name === "Map" || name === "Array") {
+        fail(ctx, n, `new ${name}<T>(...) needs its type arguments — e.g. new ${name}<string, int>()`);
+        return "nil";
+      }
       if (ctx.modules.has(name)) return `${qNew(ctx, name)}()`; // `new AppModule()` — module factory
       const info = ctx.classes.get(name);
       if (info?.hasCtor) return `${qNew(ctx, name)}(${args})`;
@@ -1612,6 +1663,10 @@ function ex(ctx: Ctx, e: ts.Expression, want?: ts.TypeNode): string {
     case ts.SyntaxKind.AsExpression:
     case ts.SyntaxKind.TypeAssertionExpression: {
       const a = e as ts.AsExpression;
+      if (ts.isTypeReferenceNode(a.type) && a.type.typeName.getText() === "const") {
+        fail(ctx, e, "'as const' is not supported — declare a const or a literal type");
+        return ex(ctx, a.expression);
+      }
       return `${emitType(ctx, a.type)}(${ex(ctx, a.expression)})`; // x as T -> T(x)
     }
     case ts.SyntaxKind.SatisfiesExpression:
@@ -1669,6 +1724,12 @@ function ex(ctx: Ctx, e: ts.Expression, want?: ts.TypeNode): string {
       fail(ctx, e, "spread in this position is not supported");
       return "";
     }
+    case ts.SyntaxKind.RegularExpressionLiteral:
+      fail(ctx, e, "regex literals are not supported — use the regexp package");
+      return `""`;
+    case ts.SyntaxKind.MetaProperty:
+      fail(ctx, e, "meta properties (new.target/import.meta) are not supported");
+      return "nil";
     default:
       fail(ctx, e, `unsupported expression: ${ts.SyntaxKind[e.kind]}`);
       return "nil";
@@ -1945,6 +2006,7 @@ function call(ctx: Ctx, c: ts.CallExpression, want?: ts.TypeNode): string {
   // builtins
   if (ts.isIdentifier(callee)) {
     const name = callee.text;
+    if (name === "eval" || name === "Function") { fail(ctx, c, `'${name}' is not supported`); return "nil"; }
     if (GO_BUILTINS.has(name)) return `${name}(${args()})`;
     if (GO_TYPES.has(name) && c.arguments.length === 1) return `${name}(${args()})`; // conversion
     if (name in GO_TYPE_ALIASES && c.arguments.length === 1)

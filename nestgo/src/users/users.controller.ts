@@ -3,7 +3,7 @@
 // resolves the dependency by type, same as NestJS constructor injection.
 // Handler shape: (c: Ptr<nest.Ctx>[, body: Ptr<Dto>]): [Any, Error].
 
-import * as nest from "nestgo/nest"
+import nest from "nestgo/nest"
 import * as strconv from "strconv"
 import { UsersService } from "./users.service"
 import { CreateUserDto, UpdateUserDto } from "./dto/users.dto"

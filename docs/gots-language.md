@@ -83,18 +83,45 @@ the Go type name so the emitter recovers it through real checker inference.
 ## Imports
 
 - `import "fmt"` -> `import "fmt"` (use as `fmt.X`)
-- `import * as s from "strings"` -> same, alias
+- `import * as s from "strings"` -> `import s "strings"` (alias)
+- `import s from "strings"` -> `import s "strings"` — **the default import IS
+  the package**; gots has no default exports, `import d from "p"` always binds
+  `p` itself. Mixed forms work: `import d, {a} from "p"` -> alias + dot-import,
+  `import d, * as ns` -> one alias (`ns` -> `d`).
 - `import {A,B} from "x"` -> `import . "x"` (dot-import)
 - `import {X} from "./sibling"` -> stripped — same Go package
 - `import {X} from "./sub"` / `"../pkg"` -> `import "module/relpath"`,
-  `X` -> `pkg.X`
+  `X` -> `pkg.X`; `import d from "./sub"` -> `import d "module/relpath"`
+- `export` is erased — exported-ness is Go capitalization. `export default`/
+  `export *` don't exist: the package itself is the default import target.
 - Unused imports are dropped (Go rejects them).
 
-## Errors (not yet supported — fail with diagnostics)
+## Errors — unsupported constructs (diagnostic code 95002, "gots:")
 
-Plain unions (use `T|null`), nested/rest/defaults inside binding patterns,
-spread in object literals, `??=`/`||=`/`&&=` in expression position,
-static accessors, comma expressions, `with`, getters/setters on interfaces.
+`gots check`/`build` and the IDE plugin report these at `file:line:col` —
+they typecheck in TS but have no Go equivalent:
+
+| Construct | Status |
+|---|---|
+| `A \| B` unions (beyond `T\|null`) | error — Go has no union types |
+| `export default <expr>`, `export *`, `{x as default}` | error — the package is the default import |
+| generators / `yield`, `for await`, `async` iteration | error — use channels/slices |
+| overloads, `declare` in `.ts`, `namespace`/`module` | error |
+| `#private` fields, `accessor` keyword, static blocks, static accessors | error — `private`, explicit get/set, package vars |
+| `with`, `eval`, `Function()`, `arguments`, `new.target` | error — use rest params, etc. |
+| regex literals | error — use `regexp` package |
+| `using`/`await using` | error — call `Close()` or `defer` |
+| `as const`, type predicates (`x is T`), conditional/mapped/template-literal/`infer`/indexed types | error |
+| spread in object literals; comma expressions | error |
+| `??=`/`||=`/`&&=` in expression position | error — statement form only |
+| nested/rest/defaults inside binding patterns | error — flat renames only |
+| `new Map()`/`Channel`/`Array` without type args | error — write the type args |
+| `import d from "./sibling"` | error — same package, no namespace to bind |
+| `import x = require()` | error — ES imports only |
+| default params referencing earlier params | compiles but won't — pad is per-call-site |
+
+Emitter `fail()` covers the same set at emit time, so nothing slips through
+silently even if diagnostics are bypassed.
 
 ## JS-semantics notes
 

@@ -2,7 +2,7 @@
 // `AppModule` (the @Module class) emits `NewAppModule()` — the generated
 // module factory — so this reads exactly like NestFactory.create(AppModule).
 
-import * as nest from "nestgo/nest"
+import nest from "nestgo/nest"
 import { AppModule } from "./app.module"
 import { ConfigService } from "./core/config.service"
 

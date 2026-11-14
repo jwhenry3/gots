@@ -2,7 +2,7 @@
 // @Injectable() marks them for DI construction; the framework interfaces
 // (CanActivate / Intercept) are already Go-cased method names.
 
-import * as nest from "nestgo/nest"
+import nest from "nestgo/nest"
 import * as log from "log"
 import * as time from "time"
 

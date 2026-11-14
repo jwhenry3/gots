@@ -102,6 +102,10 @@ Decorators are ambient globals (declared in `nestgo/types/nest.d.ts`) — no imp
   + references become `pkg.X` (aliasOf table). Import path derives from the
   nearest `go.mod` upward.
 - `import * as n from "../pkg"` -> `import n "path"` — namespace alias honored.
+- `import d from "path"` (default import) -> `import d "path"` — the default
+  import IS the package; gots has no default exports. `import d, {a}` and
+  `import d, * as ns` also work. `export default`/`export *` are diagnostics.
+- `import d from "./sibling"` is an ERROR — same package, nothing to bind.
 
 ## Framework API (nestgo/nest)
 
@@ -117,6 +121,11 @@ the framework calls it on body injection (the `Validatable` interface).
 ## Gotchas / known limitations
 
 - `Int64(1.5)` errors at compile time (custom diag 95001 in CLI + plugin).
+- Unsupported-construct diagnostics are code 95002 ("gots:") — checks.cjs
+  `unsupportedDiagnostics()` mirrors emitter `fail()` so IDE + `gots check`
+  catch them early. Keep the two in sync when adding/removing features.
+- Semantic-diagnostic errors no longer suppress gots checks — run() collects
+  both so unsupported constructs flag alongside TS errors.
 - Ternaries need a declared type (emitter emits an IIFE).
 - `SetViews("views/*.html")` finds views from any CWD — don't regress it.
 - `getText()` on AST nodes: NEVER pass a SourceFile — nodes may come from

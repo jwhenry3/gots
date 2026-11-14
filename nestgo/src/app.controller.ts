@@ -1,6 +1,6 @@
 // app.controller.ts — serves the view (@Render / GET /).
 
-import * as nest from "nestgo/nest"
+import nest from "nestgo/nest"
 
 @Controller("/")
 export class AppController {
