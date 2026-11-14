@@ -1,0 +1,16 @@
+{
+  "name": "go-nest",
+  "private": true,
+  "version": "1.0.0",
+  "description": "gots — a TypeScript-syntax language transpiling to exact-semantics Go — plus nestgo, a NestJS-style framework + app written in it",
+  "scripts": {
+    "build": "node gots/src/cli.ts build nestgo/src && go -C nestgo build ./...",
+    "dev": "node gots/src/cli.ts build nestgo/src && go -C nestgo run ./src/",
+    "start": "npm run dev",
+    "check": "node gots/src/cli.ts check nestgo/src",
+    "typecheck": "cd gots && npx tsc -p tsconfig.json",
+    "examples": "node gots/src/cli.ts build gots/examples/hello.ts && node gots/src/cli.ts build gots/examples/concurrency.ts",
+    "clean": "node scripts/clean.mjs",
+    "verify": "npm run typecheck && npm run examples && npm run build"
+  }
+}
