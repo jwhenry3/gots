@@ -10,14 +10,20 @@
   <path d="M128 62 C162 62 186 96 186 136 C186 178 160 214 128 214 C96 214 70 178 70 136 C70 96 94 62 128 62 Z" fill="#FBF7EF"/>
   <!-- forelock -->
   <path d="M104 66 Q128 46 152 66 Q128 56 104 66 Z" fill="#E3D5C0"/>
-  <!-- eyes: horizontal goat pupils -->
-  <rect x="94" y="122" width="24" height="11" rx="5.5" fill="#263238"/>
-  <rect x="138" y="122" width="24" height="11" rx="5.5" fill="#263238"/>
+  <!-- happy arched eyes -->
+  <path d="M94 130 Q106 114 118 130" stroke="#263238" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <path d="M138 130 Q150 114 162 130" stroke="#263238" stroke-width="7" fill="none" stroke-linecap="round"/>
+  <!-- blush cheeks -->
+  <ellipse cx="88" cy="152" rx="11" ry="8" fill="#F5A79F" opacity="0.85"/>
+  <ellipse cx="168" cy="152" rx="11" ry="8" fill="#F5A79F" opacity="0.85"/>
   <!-- muzzle -->
   <ellipse cx="128" cy="180" rx="38" ry="25" fill="#E3D5C0"/>
   <!-- nostrils -->
-  <circle cx="116" cy="177" r="4" fill="#263238"/>
-  <circle cx="140" cy="177" r="4" fill="#263238"/>
+  <circle cx="116" cy="172" r="4" fill="#263238"/>
+  <circle cx="140" cy="172" r="4" fill="#263238"/>
+  <!-- open grin + tongue -->
+  <path d="M110 182 Q128 210 146 182 Q128 194 110 182 Z" fill="#7A4034"/>
+  <path d="M119 191 Q128 199 137 191 Q128 206 119 191 Z" fill="#F5A79F"/>
   <!-- beard tuft -->
   <path d="M117 203 Q128 222 139 203 L134 234 Q128 239 122 234 Z" fill="#E3D5C0"/>
 </svg>
