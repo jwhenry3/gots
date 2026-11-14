@@ -1,4 +1,4 @@
-# go-nest — write NestJS apps in TypeScript syntax, ship them as native Go
+# GOTS (Goats) — write NestJS apps in TypeScript syntax, ship them as native Go
 
 **gots** is a TypeScript-flavored language that transpiles to plain Go — the
 same relationship TypeScript has to JavaScript, but targeting Go. Type
