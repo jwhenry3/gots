@@ -1,0 +1,32 @@
+# --- Node / gots toolchain ---
+node_modules/
+.gots-cache/
+*.tsbuildinfo
+
+# --- generated transpiler output (`.go` emitted next to `.ts` sources) ---
+nestgo/src/**/*.go
+gots/examples/*.go
+
+# --- Go build artifacts ---
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# --- environment / secrets ---
+.env
+.env.*
+
+# --- editors / OS ---
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
+
+# --- misc build output ---
+dist/
+out/
+coverage*.html

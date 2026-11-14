@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# gots — TypeScript-syntax -> Go transpiler
+exec node "$(dirname "$0")/src/cli.ts" "$@"
