@@ -5,12 +5,12 @@
   <path d="M166 76 C184 58 196 36 198 8 C182 30 162 50 146 62 Z" fill="#6B4F3B"/>
   <!-- rough spiky chin beard (under head layer) -->
   <path d="M112 201 Q128 206 144 203 L142 218 L140 234 L136 218 L132 240 L128 222 L124 242 L120 222 L116 236 L114 216 Z" fill="#E3D5C0"/>
-  <!-- ears -->
-  <ellipse cx="60" cy="122" rx="24" ry="13" transform="rotate(-28 60 122)" fill="#E3D5C0"/>
-  <ellipse cx="196" cy="122" rx="24" ry="13" transform="rotate(28 196 122)" fill="#E3D5C0"/>
+  <!-- ears: pointed, angled upward -->
+  <path d="M86 110 C72 102 58 86 52 64 C68 72 82 88 90 102 Z" fill="#E3D5C0"/>
+  <path d="M170 110 C184 102 198 86 204 64 C188 72 174 88 166 102 Z" fill="#E3D5C0"/>
   <!-- inner ear contour -->
-  <ellipse cx="62" cy="122" rx="13" ry="6" transform="rotate(-28 62 122)" fill="#D8C3A8"/>
-  <ellipse cx="194" cy="122" rx="13" ry="6" transform="rotate(28 194 122)" fill="#D8C3A8"/>
+  <path d="M80 102 C72 96 64 86 60 74 C70 80 78 90 84 98 Z" fill="#D8C3A8"/>
+  <path d="M176 102 C184 96 192 86 196 74 C186 80 178 90 172 98 Z" fill="#D8C3A8"/>
   <!-- head: two overlapping ovals — broad cranium + narrow jaw -->
   <ellipse cx="128" cy="106" rx="58" ry="60" fill="#FBF7EF"/>
   <ellipse cx="128" cy="166" rx="40" ry="46" fill="#FBF7EF"/>
