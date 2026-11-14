@@ -26,9 +26,9 @@
   <rect x="138" y="122" width="24" height="11" rx="5.5" fill="#263238"/>
   <!-- snout: small tint hugging the chin edge -->
   <path d="M104 176 C104 162 115 156 128 156 C141 156 152 162 152 176 C152 192 141 206 128 208 C115 206 104 192 104 176 Z" fill="#E3D5C0"/>
-  <!-- nostrils -->
-  <circle cx="118" cy="188" r="4" fill="#263238"/>
-  <circle cx="138" cy="188" r="4" fill="#263238"/>
-  <!-- mouth line -->
-  <path d="M121 196 Q128 200 135 196" stroke="#263238" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+  <!-- flared nostrils -->
+  <ellipse cx="115" cy="187" rx="7" ry="4" transform="rotate(-28 115 187)" fill="#263238"/>
+  <ellipse cx="141" cy="187" rx="7" ry="4" transform="rotate(28 141 187)" fill="#263238"/>
+  <!-- cleft lip -->
+  <path d="M128 190 L128 199 L121 204 M128 199 L135 204" stroke="#263238" stroke-width="3" fill="none" stroke-linecap="round"/>
 </svg>
