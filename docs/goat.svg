@@ -26,8 +26,8 @@
   <path d="M92 112 Q106 104 120 110" stroke="#D8C3A8" stroke-width="5" fill="none" stroke-linecap="round"/>
   <path d="M136 110 Q150 104 164 112" stroke="#D8C3A8" stroke-width="5" fill="none" stroke-linecap="round"/>
   <!-- eyes -->
-  <circle cx="106" cy="127" r="11" fill="#263238"/>
-  <circle cx="150" cy="127" r="11" fill="#263238"/>
+  <circle cx="100" cy="118" r="11" fill="#263238"/>
+  <circle cx="156" cy="118" r="11" fill="#263238"/>
   <!-- snout: small tint hugging the chin edge -->
   <path d="M104 176 C104 162 115 156 128 156 C141 156 152 162 152 176 C152 192 141 206 128 208 C115 206 104 192 104 176 Z" fill="#E3D5C0"/>
   <!-- flared nostrils -->
